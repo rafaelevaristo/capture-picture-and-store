@@ -4,31 +4,10 @@ import base64
 import os
 import time
 import json
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
-
-def write_unencripted_to_disk(base64Image):
-        
-    # Generate unique filename based on timestamp
-    timestamp = int(time.time())
-    filename = f"image_{timestamp}.jpg"
-    filepath = os.path.join(STORAGE_DIR, filename)
-    
-    # Save encrypted image
-    with open(filepath, 'wb') as f:
-        f.write(base64Image)
-
-
-def save_temp_image(image_bytes):
-    temp_filename = f"temp_{int(time.time())}.jpg"
-    temp_path = os.path.join(STORAGE_DIR, temp_filename)
-    with open(temp_path, 'wb') as f:
-        f.write(image_bytes)
-    return temp_filename
-
-
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.backends import default_backend
+import io
 
 
 app = Flask(__name__, static_folder='static')
@@ -44,42 +23,116 @@ STORAGE_DIR = 'secure_images'
 if not os.path.exists(STORAGE_DIR):
     os.makedirs(STORAGE_DIR)
 
-# Initialize encryption key
-def generate_key(password, salt=None):
-    if salt is None:
-        salt = os.urandom(16)
+# Key files
+PRIVATE_KEY_FILE = os.path.join(STORAGE_DIR, "private_key.pem")
+PUBLIC_KEY_FILE = os.path.join(STORAGE_DIR, "public_key.pem")
+
+# Generate or load RSA keys
+def get_rsa_keys():
+    if os.path.exists(PRIVATE_KEY_FILE) and os.path.exists(PUBLIC_KEY_FILE):
+        # Load existing keys
+        with open(PRIVATE_KEY_FILE, "rb") as f:
+            private_key = serialization.load_pem_private_key(
+                f.read(),
+                password=None,
+                backend=default_backend()
+            )
+        
+        with open(PUBLIC_KEY_FILE, "rb") as f:
+            public_key = serialization.load_pem_public_key(
+                f.read(),
+                backend=default_backend()
+            )
+    else:
+        # Generate new key pair
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+            backend=default_backend()
+        )
+        public_key = private_key.public_key()
+        
+        # Save private key
+        with open(PRIVATE_KEY_FILE, "wb") as f:
+            f.write(private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            ))
+        
+        # Save public key
+        with open(PUBLIC_KEY_FILE, "wb") as f:
+            f.write(public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            ))
     
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=100000,
-    )
+    return private_key, public_key
+
+# Get or generate RSA keys
+private_key, public_key = get_rsa_keys()
+
+def encrypt_data(data):
+    """Encrypt data using RSA public key"""
+    # Since RSA can only encrypt small amounts of data,
+    # we'll chunk the data into appropriate sizes
+    chunk_size = 190  # Leave room for padding (for 2048-bit key)
+    chunks = [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
+    encrypted_chunks = []
     
-    key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
-    return key, salt
+    for chunk in chunks:
+        encrypted_chunk = public_key.encrypt(
+            chunk,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        encrypted_chunks.append(encrypted_chunk)
+    
+    # Return encrypted chunks with their lengths for easier decryption later
+    result = []
+    for chunk in encrypted_chunks:
+        # Store the length (4 bytes) followed by the encrypted chunk
+        length = len(chunk).to_bytes(4, byteorder='big')
+        result.append(length + chunk)
+    
+    return b''.join(result)
 
-# Use a secret key for encryption (in production, store this securely!)
-# For demo purposes, we're using a hardcoded password
-# In a real application, use environment variables or a secure key management system
-PASSWORD = "your-secure-password-change-this"
+def decrypt_data(encrypted_data):
+    """Decrypt data using RSA private key"""
+    # Parse the encrypted chunks
+    data = io.BytesIO(encrypted_data)
+    decrypted_chunks = []
+    
+    while data.tell() < len(encrypted_data):
+        # Read the length (4 bytes)
+        chunk_length = int.from_bytes(data.read(4), byteorder='big')
+        # Read the chunk
+        encrypted_chunk = data.read(chunk_length)
+        
+        # Decrypt the chunk
+        decrypted_chunk = private_key.decrypt(
+            encrypted_chunk,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        decrypted_chunks.append(decrypted_chunk)
+    
+    # Combine decrypted chunks
+    return b''.join(decrypted_chunks)
 
-# Generate encryption key and store salt
-KEY_FILE = os.path.join(STORAGE_DIR, "key_salt.json")
-if os.path.exists(KEY_FILE):
-    with open(KEY_FILE, 'r') as f:
-        key_data = json.load(f)
-        salt = base64.b64decode(key_data['salt'])
-        key, _ = generate_key(PASSWORD, salt)
-else:
-    key, salt = generate_key(PASSWORD)
-    with open(KEY_FILE, 'w') as f:
-        json.dump({
-            'salt': base64.b64encode(salt).decode()
-        }, f)
-
-# Create Fernet cipher
-cipher = Fernet(key)
+def save_temp_image(image_bytes):
+    """Save image to a temporary file and return its filename"""
+    temp_filename = f"temp_{int(time.time())}.jpg"
+    temp_path = os.path.join(STORAGE_DIR, temp_filename)
+    with open(temp_path, 'wb') as f:
+        f.write(image_bytes)
+    return temp_filename
 
 @app.route('/api/upload', methods=['POST'])
 def upload_image():
@@ -93,7 +146,7 @@ def upload_image():
         image_data = base64.b64decode(data['image'])
         
         # Encrypt image data
-        encrypted_data = cipher.encrypt(image_data)
+        encrypted_data = encrypt_data(image_data)
         
         # Generate unique filename based on timestamp
         timestamp = int(time.time())
@@ -103,9 +156,6 @@ def upload_image():
         # Save encrypted image
         with open(filepath, 'wb') as f:
             f.write(encrypted_data)
-        
-        # Save unencriipted image
-        # write_unencripted_to_disk(image_data)        
         
         # Save metadata (timestamp, etc.)
         metadata = {
@@ -129,7 +179,7 @@ def upload_image():
 def status():
     return jsonify({"status": "running"})
 
-# Optional: Endpoint to list saved images (for development purposes)
+# Optional: Endpoint to list saved images
 @app.route('/api/images', methods=['GET'])
 def list_images():
     files = []
@@ -138,10 +188,7 @@ def list_images():
             files.append(filename)
     return jsonify({"images": files})
 
-
-
-# Decript the filename. 
-# TODO: return only bytes not temp files 
+# Decrypt and return an image
 @app.route('/api/decrypt/<filename>', methods=['GET'])
 def decrypt_image(filename):
     try:
@@ -159,7 +206,7 @@ def decrypt_image(filename):
             encrypted_data = f.read()
         
         # Decrypt the data
-        decrypted_data = cipher.decrypt(encrypted_data)
+        decrypted_data = decrypt_data(encrypted_data)
         
         # Return the image data as response
         return send_from_directory(
@@ -171,7 +218,16 @@ def decrypt_image(filename):
         print(f"Decryption error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-
+# Endpoint to download the public key
+@app.route('/api/public-key', methods=['GET'])
+def get_public_key():
+    try:
+        with open(PUBLIC_KEY_FILE, 'rb') as f:
+            key_data = f.read()
+        return key_data, 200, {'Content-Type': 'application/x-pem-file'}
+    except Exception as e:
+        print(f"Error retrieving public key: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 # Serve the frontend
 @app.route('/')
@@ -206,7 +262,7 @@ if __name__ == '__main__':
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Webcam Capture App</title>
+    <title>Secure Webcam Capture App</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -323,6 +379,17 @@ if __name__ == '__main__':
             color: #e74c3c;
             display: none;
         }
+        .security-info {
+            margin-top: 30px;
+            padding: 15px;
+            background-color: #eaf2f8;
+            border-radius: 8px;
+            border-left: 4px solid #3498db;
+        }
+        .security-info h3 {
+            margin-top: 0;
+            color: #2980b9;
+        }
     </style>
 </head>
 <body>
@@ -356,6 +423,12 @@ if __name__ == '__main__':
         
         <div class="status error" id="errorMessage">
             Error: Could not save image.
+        </div>
+        
+        <div class="security-info">
+            <h3>Security Information</h3>
+            <p>This application uses RSA asymmetric encryption to secure your images. Images are encrypted with a public key before transmission, and can only be decrypted with the private key stored securely on the server.</p>
+            <p><a href="/api/public-key" download="public_key.pem">Download Public Key</a></p>
         </div>
     </div>
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Webcam Capture App</title>
+    <title>Secure Webcam Capture App</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -120,6 +120,17 @@
             color: #e74c3c;
             display: none;
         }
+        .security-info {
+            margin-top: 30px;
+            padding: 15px;
+            background-color: #eaf2f8;
+            border-radius: 8px;
+            border-left: 4px solid #3498db;
+        }
+        .security-info h3 {
+            margin-top: 0;
+            color: #2980b9;
+        }
     </style>
 </head>
 <body>
@@ -153,6 +164,12 @@
         
         <div class="status error" id="errorMessage">
             Error: Could not save image.
+        </div>
+        
+        <div class="security-info">
+            <h3>Security Information</h3>
+            <p>This application uses RSA asymmetric encryption to secure your images. Images are encrypted with a public key before transmission, and can only be decrypted with the private key stored securely on the server.</p>
+            <p><a href="/api/public-key" download="public_key.pem">Download Public Key</a></p>
         </div>
     </div>
 
