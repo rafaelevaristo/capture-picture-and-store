@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webcam Capture App</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f7fa;
+            color: #333;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+        .camera-select {
+            width: 100%;
+            max-width: 640px;
+            margin-bottom: 10px;
+        }
+        select {
+            width: 100%;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            background-color: white;
+            font-size: 16px;
+        }
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        #video {
+            width: 100%;
+            height: auto;
+            background-color: #000;
+            display: block;
+        }
+        #canvas {
+            display: none;
+        }
+        .preview {
+            width: 100%;
+            max-width: 640px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            display: none;
+        }
+        #capturedImage {
+            width: 100%;
+            height: auto;
+        }
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-top: 10px;
+        }
+        button {
+            padding: 12px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        #captureBtn {
+            background-color: #3498db;
+            color: white;
+        }
+        #captureBtn:hover {
+            background-color: #2980b9;
+        }
+        #sendBtn {
+            background-color: #2ecc71;
+            color: white;
+            display: none;
+        }
+        #sendBtn:hover {
+            background-color: #27ae60;
+        }
+        #retakeBtn {
+            background-color: #e74c3c;
+            color: white;
+            display: none;
+        }
+        #retakeBtn:hover {
+            background-color: #c0392b;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+            font-weight: 500;
+        }
+        .success {
+            background-color: #d5f5e3;
+            color: #27ae60;
+            display: none;
+        }
+        .error {
+            background-color: #fadbd8;
+            color: #e74c3c;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Secure Webcam Capture</h1>
+        
+        <div class="camera-select">
+            <select id="cameraSelect">
+                <option value="">Loading cameras...</option>
+            </select>
+        </div>
+        
+        <div class="video-container">
+            <video id="video" autoplay playsinline></video>
+            <canvas id="canvas"></canvas>
+        </div>
+        
+        <div class="preview">
+            <img id="capturedImage" alt="Captured image">
+        </div>
+        
+        <div class="controls">
+            <button id="captureBtn">Take Photo</button>
+            <button id="retakeBtn">Retake</button>
+            <button id="sendBtn">Save Securely</button>
+        </div>
+        
+        <div class="status success" id="successMessage">
+            Image securely saved to server!
+        </div>
+        
+        <div class="status error" id="errorMessage">
+            Error: Could not save image.
+        </div>
+    </div>
+
+    <script>
+        // DOM elements
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const capturedImage = document.getElementById('capturedImage');
+        const captureBtn = document.getElementById('captureBtn');
+        const retakeBtn = document.getElementById('retakeBtn');
+        const sendBtn = document.getElementById('sendBtn');
+        const successMessage = document.getElementById('successMessage');
+        const errorMessage = document.getElementById('errorMessage');
+        const videoContainer = document.querySelector('.video-container');
+        const preview = document.querySelector('.preview');
+        const cameraSelect = document.getElementById('cameraSelect');
+        
+        // Global variables
+        let currentStream = null;
+        
+        // Get list of available cameras
+        async function getCameras() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                
+                // Clear the dropdown
+                cameraSelect.innerHTML = '';
+                
+                if (videoDevices.length === 0) {
+                    const option = document.createElement('option');
+                    option.text = 'No cameras found';
+                    cameraSelect.add(option);
+                    errorMessage.textContent = "No cameras detected on your device.";
+                    errorMessage.style.display = "block";
+                    return;
+                }
+                
+                // Add cameras to dropdown
+                videoDevices.forEach((device, index) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Camera ${index + 1}`;
+                    cameraSelect.add(option);
+                });
+                
+                // Select first camera by default
+                startCamera(videoDevices[0].deviceId);
+            } catch (err) {
+                console.error("Error enumerating devices:", err);
+                errorMessage.textContent = "Error detecting cameras. Please ensure permissions are granted.";
+                errorMessage.style.display = "block";
+            }
+        }
+        
+        // Get access to webcam
+        async function startCamera(deviceId = null) {
+            try {
+                // Stop any existing stream
+                if (currentStream) {
+                    currentStream.getTracks().forEach(track => {
+                        track.stop();
+                    });
+                }
+                
+                // Set constraints based on selected device
+                const constraints = {
+                    video: deviceId ? { deviceId: { exact: deviceId } } : true,
+                    audio: false
+                };
+                
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                currentStream = stream;
+                
+                // Hide error message if it was displayed
+                errorMessage.style.display = "none";
+            } catch (err) {
+                console.error("Error accessing webcam:", err);
+                errorMessage.textContent = "Error: Cannot access webcam. Please ensure you've granted camera permissions.";
+                errorMessage.style.display = "block";
+            }
+        }
+        
+        // Listen for camera selection changes
+        cameraSelect.addEventListener('change', function() {
+            if (this.value) {
+                startCamera(this.value);
+            }
+        });
+
+        // Capture image from webcam
+        captureBtn.addEventListener('click', function() {
+            // Set canvas dimensions to match video
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            // Draw current video frame to canvas
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Convert canvas to image
+            const imageDataUrl = canvas.toDataURL('image/jpeg');
+            capturedImage.src = imageDataUrl;
+            
+            // Show preview and controls
+            videoContainer.style.display = 'none';
+            preview.style.display = 'block';
+            captureBtn.style.display = 'none';
+            retakeBtn.style.display = 'inline-block';
+            sendBtn.style.display = 'inline-block';
+            
+            // Reset status messages
+            successMessage.style.display = 'none';
+            errorMessage.style.display = 'none';
+        });
+
+        // Retake photo
+        retakeBtn.addEventListener('click', function() {
+            // Hide preview, show video
+            videoContainer.style.display = 'block';
+            preview.style.display = 'none';
+            
+            // Show/hide buttons
+            captureBtn.style.display = 'inline-block';
+            retakeBtn.style.display = 'none';
+            sendBtn.style.display = 'none';
+            
+            // Reset status messages
+            successMessage.style.display = 'none';
+            errorMessage.style.display = 'none';
+        });
+
+        // Send image to server
+        sendBtn.addEventListener('click', async function() {
+            try {
+                // Get base64 image data without "data:image/jpeg;base64," prefix
+                const imageData = capturedImage.src.split(',')[1];
+                
+                // Send to server
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        image: imageData,
+                        timestamp: new Date().toISOString()
+                    })
+                });
+                
+                if (response.ok) {
+                    successMessage.style.display = 'block';
+                    errorMessage.style.display = 'none';
+                } else {
+                    throw new Error('Server error: ' + response.status);
+                }
+            } catch (err) {
+                console.error("Error sending image:", err);
+                errorMessage.textContent = "Error: Failed to save image. Please try again.";
+                errorMessage.style.display = 'block';
+                successMessage.style.display = 'none';
+            }
+        });
+
+        // Initialize
+        async function init() {
+            try {
+                // First request camera permissions
+                await navigator.mediaDevices.getUserMedia({ video: true });
+                // Then get camera list
+                await getCameras();
+            } catch (err) {
+                console.error("Initialization error:", err);
+                errorMessage.textContent = "Error initializing camera. Please grant camera permissions and refresh.";
+                errorMessage.style.display = "block";
+            }
+        }
+        
+        // Start the application
+        init();
+    </script>
+</body>
+</html>
