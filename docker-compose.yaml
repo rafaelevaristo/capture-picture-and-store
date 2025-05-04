@@ -1,0 +1,21 @@
+
+version: '3'
+
+services:
+  webcam-app:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./secure_images:/app/secure_images
+      - ./certs:/app/certs
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=production
+      # Enable HTTPS (set to "true" to use HTTPS)
+      - USE_HTTPS=true
+      # Directory where certificates are stored
+      - CERT_DIR=/app/certs
+      # Uncomment and set this to use an environment variable for the encryption password
+      # - ENCRYPTION_PASSWORD=your_secure_password_here
+    restart: unless-stopped

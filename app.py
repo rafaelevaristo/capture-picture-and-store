@@ -615,4 +615,34 @@ if __name__ == '__main__':
 </html>''')
         print(f"Index.html created successfully!")
     
-    app.run(debug=True)
+    # Use 0.0.0.0 to make the server accessible from outside the container
+    # Check if we should use HTTPS
+    use_https = os.environ.get('USE_HTTPS', 'false').lower() == 'true'
+    
+    if use_https:
+        # For HTTPS mode
+        cert_dir = os.environ.get('CERT_DIR', '/app/certs')
+        cert_file = os.path.join(cert_dir, 'cert.pem')
+        key_file = os.path.join(cert_dir, 'key.pem')
+        
+        # Check if certificate files exist, if not, create self-signed certificate
+        if not (os.path.exists(cert_file) and os.path.exists(key_file)):
+            if not os.path.exists(cert_dir):
+                os.makedirs(cert_dir)
+            
+            # Create self-signed certificate
+            print("Generating self-signed certificate...")
+            import subprocess
+            subprocess.run([
+                'openssl', 'req', '-x509', '-newkey', 'rsa:4096', '-nodes',
+                '-out', cert_file, '-keyout', key_file,
+                '-days', '365', '-subj', '/CN=localhost'
+            ])
+            print(f"Certificate generated at {cert_file}")
+        
+        # Run with HTTPS
+        app.run(host='0.0.0.0', port=5000, ssl_context=(cert_file, key_file), debug=True)
+    else:
+        # Run with HTTP (default)
+        app.run(host='0.0.0.0', port=5000, debug=True)
+    
